@@ -4,6 +4,50 @@ const CHUNK=120, MIN_CHUNK=3, $=x=>document.getElementById(x);
 let file=null,mediaName="transcricao",ff=null,cancelled=false,finalVtt="",activeAbort=null;
 let sourceMode="file";
 
+function abortError(){
+ return new DOMException("Cancelado","AbortError");
+}
+
+function abortable(promise,signal){
+ if(!signal)return promise;
+ if(signal.aborted)return Promise.reject(abortError());
+
+ return new Promise((resolve,reject)=>{
+  const onAbort=()=>reject(abortError());
+  signal.addEventListener("abort",onAbort,{once:true});
+
+  promise.then(
+   value=>{
+    signal.removeEventListener("abort",onAbort);
+    resolve(value);
+   },
+   err=>{
+    signal.removeEventListener("abort",onAbort);
+    reject(err);
+   }
+  );
+ });
+}
+
+async function readBlobCancellable(blob,signal){
+ const STEP=4*1024*1024;
+ const out=new Uint8Array(blob.size);
+
+ for(let offset=0;offset<blob.size;offset+=STEP){
+  if(signal?.aborted)throw abortError();
+
+  const end=Math.min(blob.size,offset+STEP);
+  const ab=await abortable(blob.slice(offset,end).arrayBuffer(),signal);
+
+  if(signal?.aborted)throw abortError();
+  out.set(new Uint8Array(ab),offset);
+
+  await new Promise(resolve=>setTimeout(resolve,0));
+ }
+
+ return out;
+}
+
 function refreshSource(){
  sourceMode=document.querySelector('input[name=source]:checked').value;
  $("urlBox").hidden=sourceMode!=="url";
@@ -113,37 +157,69 @@ function prog(p,s,d=""){
 
 async function engine(){
  if(ff)return ff;
+
  if(!window.crossOriginIsolated||typeof SharedArrayBuffer==="undefined"){
   throw Error("O Netlify não ativou o isolamento necessário ao FFmpeg. Confirme que o arquivo _headers foi publicado e reabra o site.");
  }
  if(!window.FFmpeg)throw Error("Não foi possível carregar o FFmpeg.");
- ff=FFmpeg.createFFmpeg({
+
+ const local=FFmpeg.createFFmpeg({
   log:false,
   corePath:"https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js"
  });
+ ff=local;
+
  prog(2,"Carregando processador de mídia…","Inicializando o FFmpeg no navegador.");
- await ff.load();
- if(cancelled){
-  try{ff.exit()}catch{}
-  ff=null;
-  throw new DOMException("Cancelado","AbortError");
+
+ try{
+  await abortable(local.load(),activeAbort?.signal);
+ }catch(e){
+  try{local.exit()}catch{}
+  if(ff===local)ff=null;
+  if(cancelled||e?.name==="AbortError")throw abortError();
+  throw e;
  }
- return ff;
+
+ if(cancelled){
+  try{local.exit()}catch{}
+  if(ff===local)ff=null;
+  throw abortError();
+ }
+
+ return local;
 }
 
-function mediaDuration(blob){
+function mediaDuration(blob,signal){
  return new Promise((resolve,reject)=>{
   const el=document.createElement(blob.type?.startsWith("audio/")?"audio":"video");
   const url=URL.createObjectURL(blob);
   let done=false;
+
   const finish=(ok,val)=>{
-   if(done)return;done=true;
+   if(done)return;
+   done=true;
    clearTimeout(timer);
+   try{signal?.removeEventListener("abort",onAbort)}catch{}
    try{el.removeAttribute("src");el.load()}catch{}
    URL.revokeObjectURL(url);
    ok?resolve(val):reject(val);
   };
-  const timer=setTimeout(()=>finish(false,new Error("Tempo esgotado ao ler a duração da mídia.")),10000);
+
+  const timer=setTimeout(
+   ()=>finish(false,new Error("Tempo esgotado ao ler a duração da mídia.")),
+   10000
+  );
+
+  const onAbort=()=>finish(false,abortError());
+
+  if(signal){
+   if(signal.aborted){
+    onAbort();
+    return;
+   }
+   signal.addEventListener("abort",onAbort,{once:true});
+  }
+
   el.preload="metadata";
   el.onloadedmetadata=()=>{
    const d=Number(el.duration);
@@ -163,8 +239,13 @@ async function probeDuration(f,input){
   if(m)found=Number(m[1])*3600+Number(m[2])*60+Number(m[3]);
  });
  try{
-  await f.run("-i",input,"-t","0.001","-f","null","probe.null");
- }catch{}
+  await abortable(
+   f.run("-i",input,"-t","0.001","-f","null","probe.null"),
+   activeAbort?.signal
+  );
+ }catch(e){
+  if(cancelled||e?.name==="AbortError")throw abortError();
+ }
  finally{
   try{f.setLogger(()=>{})}catch{}
   try{f.FS("unlink","probe.null")}catch{}
@@ -231,21 +312,25 @@ async function extractWav(f,input,start,duration,tag){
  try{f.FS("unlink",out)}catch{}
 
  try{
-  await f.run(
-   "-ss",String(Math.max(0,start)),
-   "-fflags","+discardcorrupt",
-   "-err_detect","ignore_err",
-   "-i",input,
-   "-t",String(Math.max(.1,duration)),
-   "-vn",
-   "-ac","1",
-   "-ar","16000",
-   "-c:a","pcm_s16le",
-   "-f","wav",
-   out
+  await abortable(
+   f.run(
+    "-ss",String(Math.max(0,start)),
+    "-fflags","+discardcorrupt",
+    "-err_detect","ignore_err",
+    "-i",input,
+    "-t",String(Math.max(.1,duration)),
+    "-vn",
+    "-ac","1",
+    "-ar","16000",
+    "-c:a","pcm_s16le",
+    "-f","wav",
+    out
+   ),
+   activeAbort?.signal
   );
  }catch(e){
   try{f.FS("unlink",out)}catch{}
+  if(cancelled||e?.name==="AbortError")throw abortError();
   throw makeErr(`O FFmpeg não conseguiu extrair o áudio em ${clock(start)}.`,"local_audio");
  }
 
@@ -333,17 +418,18 @@ function segmentsOf(d,offset){
 
 $("cancel").onclick=()=>{
  if(cancelled)return;
+
  cancelled=true;
  $("cancel").disabled=true;
  $("status").textContent="Cancelando…";
- $("detail").textContent="Interrompendo rede e processador de mídia.";
+ $("detail").textContent="Interrompendo leitura, rede e FFmpeg.";
 
  try{activeAbort?.abort()}catch{}
- activeAbort=null;
 
- if(ff){
-  try{ff.exit()}catch{}
-  ff=null;
+ const local=ff;
+ ff=null;
+ if(local){
+  try{local.exit()}catch{}
  }
 };
 
@@ -426,18 +512,22 @@ $("go").onclick=async()=>{
    }
   }else{
    prog(2,"Lendo duração da aula…","Obtendo os metadados do arquivo.");
-   try{duration=await mediaDuration(file)}catch{}
+   try{
+    duration=await mediaDuration(file,runAbort.signal);
+   }catch(e){
+    if(cancelled||e?.name==="AbortError")throw abortError();
+   }
   }
 
   const f=await engine();
   prog(4,"Lendo arquivo…",file.name);
   input="input"+(file.name.match(/\.[^.]+$/)?.[0]||".bin");
 
-  let mediaBytes=new Uint8Array(await file.arrayBuffer());
-  if(cancelled)throw new DOMException("Cancelado","AbortError");
+  let mediaBytes=await readBlobCancellable(file,runAbort.signal);
+  if(cancelled)throw abortError();
   f.FS("writeFile",input,mediaBytes);
   mediaBytes=null;
-  if(cancelled)throw new DOMException("Cancelado","AbortError");
+  if(cancelled)throw abortError();
 
   if(sourceMode==="url")file=null;
 
@@ -547,7 +637,7 @@ $("go").onclick=async()=>{
   if(e?.name==="AbortError" || cancelled){
    $("errorBox").hidden=true;
    $("status").textContent="Cancelado.";
-   $("detail").textContent="Você pode iniciar outra transcrição sem recarregar a página.";
+   $("detail").textContent="Interrompido. Você pode iniciar outra transcrição sem recarregar a página.";
   }else{
    $("error").textContent=e.message||String(e);
    $("errorBox").hidden=false;
