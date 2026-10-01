@@ -1,5 +1,5 @@
 const ENDPOINT="https://transcritor-aulas.lucas-luk-lima.workers.dev/";
-const CHUNK=120, MIN_CHUNK=3, $=x=>document.getElementById(x);
+const CHUNK=300, RECOVERY_CHUNK=120, MIN_CHUNK=3, $=x=>document.getElementById(x);
 
 let file=null,mediaName="transcricao",ff=null,cancelled=false,finalVtt="",activeAbort=null;
 let sourceMode="file";
@@ -545,7 +545,7 @@ $("go").onclick=async()=>{
   if(to<=from)throw Error("O intervalo selecionado está fora da duração da mídia.");
 
   totalMain=Math.max(1,Math.ceil((to-from)/CHUNK));
-  prog(7,"Preparando transcrição…",`${totalMain} bloco(s) principal(is) de até 2 minutos.`);
+  prog(7,"Preparando transcrição…",`${totalMain} bloco(s) principal(is) de até 5 minutos.`);
 
   let recoverySerial=0;
 
@@ -584,13 +584,35 @@ $("go").onclick=async()=>{
     }
 
     if(recoverable && dur>MIN_CHUNK+.25){
+     const pct=10+(completedMain/totalMain)*88;
+
+     // Primeira recuperação: qualquer trecho maior que 2 min
+     // é reprocessado em partes de no máximo 2 min.
+     if(dur>RECOVERY_CHUNK+.25){
+      prog(
+       pct,
+       "Recuperando trecho automaticamente…",
+       `${clock(start)}–${clock(start+dur)} falhou; tentando blocos de até 2 minutos.`
+      );
+
+      let offset=0;
+      while(offset<dur-.05){
+       if(cancelled)throw abortError();
+       const part=Math.min(RECOVERY_CHUNK,dur-offset);
+       await processInterval(start+offset,part,depth+1);
+       offset+=part;
+      }
+      return;
+     }
+
+     // Se um bloco de até 2 min ainda falhar, divide somente
+     // esse trecho pela metade, repetindo até o mínimo de 3 s.
      const left=Math.floor((dur/2)*1000)/1000;
      const right=dur-left;
-     const pct=10+(completedMain/totalMain)*88;
      prog(
       pct,
       "Recuperando trecho automaticamente…",
-      `${clock(start)}–${clock(start+dur)} falhou; tentando partes menores.`
+      `${clock(start)}–${clock(start+dur)} ainda falhou; tentando partes menores.`
      );
      await processInterval(start,left,depth+1);
      if(right>.25)await processInterval(start+left,right,depth+1);
