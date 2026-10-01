@@ -1,66 +1,59 @@
-# Transcritor de Aulas — Failover entre duas contas Cloudflare
+# Transcritor de Aulas — dois Workers em paralelo
 
-Arquitetura:
+## Arquitetura atual
 
-Netlify → Worker principal (conta A) → Workers AI
+O frontend do Netlify divide a aula em blocos principais de até **5 minutos**.
 
-Se a cota diária do Workers AI da conta A acabar:
+Os blocos são distribuídos alternadamente:
 
-Worker principal → Worker reserva (conta B) → Workers AI da conta B
+- bloco 1 → Worker principal (conta A)
+- bloco 2 → Worker reserva (conta B)
+- bloco 3 → Worker principal
+- bloco 4 → Worker reserva
 
-O frontend continua chamando somente o Worker principal. Portanto, depois de configurar o failover, mudanças de Worker não exigem alterar o Netlify.
+As duas filas trabalham ao mesmo tempo. Assim, para uma aula longa, a carga principal fica aproximadamente 50/50 entre as duas contas.
 
-## Arquivos
+Se um bloco de 5 minutos falhar, somente aquele bloco entra na recuperação:
 
-### Netlify
+- primeiro: partes de até 2 minutos;
+- se ainda falhar: divide apenas a parte problemática;
+- mínimo: 3 segundos.
+
+O resultado é reorganizado por timestamp antes de aparecer na tela, então a transcrição continua na ordem correta mesmo quando o Worker reserva termina um bloco antes do principal.
+
+## Workers
+
+### Principal
+`https://transcritor-aulas.lucas-luk-lima.workers.dev/`
+
+- código Cloudflare: `worker-principal-v13.1.js`
+- binding Workers AI: `AI`
+- variável `BACKUP_WORKER_URL` apontando para o Worker reserva
+- mantém o failover de cota no backend
+
+### Reserva
+`https://transcritor-aulas-backup.lucas-lima8.workers.dev/`
+
+- código Cloudflare: `worker-reserva-v13.1.js`
+- binding Workers AI: `AI`
+
+O frontend também consegue reenviar para o outro Worker quando recebe um erro explícito de cota.
+
+## Netlify
+
+Deploy manual somente destes arquivos:
+
 - `index.html`
 - `style.css`
 - `app.js`
 - `_headers`
-
-### Cloudflare — conta principal
-- `worker-principal-v13.1.js`
-- Binding Workers AI: `AI`
-- Runtime variable: `BACKUP_WORKER_URL`
-
-### Cloudflare — conta reserva
-- `worker-reserva-v13.1.js`
-- Binding Workers AI: `AI`
-
-## Configuração do Worker reserva
-
-Na SEGUNDA conta Cloudflare:
-
-1. Crie `transcritor-aulas-backup`.
-2. Cole `worker-reserva-v13.1.js`.
-3. Adicione o binding Workers AI chamado `AI`.
-4. Faça Deploy.
-5. Copie a URL `https://...workers.dev/`.
-
-## Configuração do Worker principal
-
-Na conta principal:
-
-1. Substitua o código pelo `worker-principal-v13.1.js`.
-2. Mantenha o binding Workers AI `AI`.
-3. Em Runtime variables and secrets, crie uma variável de texto:
-   - Key: `BACKUP_WORKER_URL`
-   - Value: URL pública completa do Worker reserva
-4. Deploy.
-
-`BACKUP_WORKER_URL` não é segredo; é apenas um endereço público.
-
-## Teste
-
-Abra o Worker principal. O JSON deve mostrar:
-
-- `"versao":"13.1-primary"`
-- `"backup_configurado":true`
-
-Abra o Worker reserva. Deve mostrar:
-
-- `"versao":"13.1-reserva"`
+- `favicon.svg`
 
 ## GitHub
+
+Nesta atualização, os arquivos alterados são:
+
+- `app.js`
+- `README.md`
 
 Não publique tokens, chaves ou links assinados.

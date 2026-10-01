@@ -1,7 +1,10 @@
-const ENDPOINT="https://transcritor-aulas.lucas-luk-lima.workers.dev/";
+const PRIMARY_ENDPOINT="https://transcritor-aulas.lucas-luk-lima.workers.dev/";
+const BACKUP_ENDPOINT="https://transcritor-aulas-backup.lucas-lima8.workers.dev/";
+const ENDPOINT=PRIMARY_ENDPOINT;
 const CHUNK=300, RECOVERY_CHUNK=120, MIN_CHUNK=3, $=x=>document.getElementById(x);
 
 let file=null,mediaName="transcricao",ff=null,cancelled=false,finalVtt="",activeAbort=null;
+let ffSerial=Promise.resolve();
 let sourceMode="file";
 
 function abortError(){
@@ -46,6 +49,18 @@ async function readBlobCancellable(blob,signal){
  }
 
  return out;
+}
+
+function withFfmpeg(task){
+ const job=ffSerial
+  .catch(()=>{})
+  .then(async()=>{
+   if(cancelled)throw abortError();
+   return task();
+  });
+
+ ffSerial=job.catch(()=>{});
+ return job;
 }
 
 function refreshSource(){
@@ -307,68 +322,78 @@ function makeErr(msg,kind=""){
 }
 
 async function extractWav(f,input,start,duration,tag){
- if(cancelled)throw new DOMException("Cancelado","AbortError");
- const out=`work_${tag}.wav`;
- try{f.FS("unlink",out)}catch{}
-
- try{
-  await abortable(
-   f.run(
-    "-ss",String(Math.max(0,start)),
-    "-fflags","+discardcorrupt",
-    "-err_detect","ignore_err",
-    "-i",input,
-    "-t",String(Math.max(.1,duration)),
-    "-vn",
-    "-ac","1",
-    "-ar","16000",
-    "-c:a","pcm_s16le",
-    "-f","wav",
-    out
-   ),
-   activeAbort?.signal
-  );
- }catch(e){
-  try{f.FS("unlink",out)}catch{}
-  if(cancelled||e?.name==="AbortError")throw abortError();
-  throw makeErr(`O FFmpeg não conseguiu extrair o áudio em ${clock(start)}.`,"local_audio");
- }
-
- let raw;
- try{raw=f.FS("readFile",out)}catch{
-  throw makeErr(`O FFmpeg não gerou áudio em ${clock(start)}.`,"local_audio");
- }finally{
-  try{f.FS("unlink",out)}catch{}
- }
- const copy=new Uint8Array(raw.length);
- copy.set(raw);
-
- if(!validWav(copy)||copy.byteLength<1000){
-  throw makeErr(`O WAV gerado em ${clock(start)} ficou vazio ou inválido.`,"local_audio");
- }
- return copy;
+ return withFfmpeg(async()=>{
+  
+   if(cancelled)throw new DOMException("Cancelado","AbortError");
+   const out=`work_${tag}.wav`;
+   try{f.FS("unlink",out)}catch{}
+  
+   try{
+    await abortable(
+     f.run(
+      "-ss",String(Math.max(0,start)),
+      "-fflags","+discardcorrupt",
+      "-err_detect","ignore_err",
+      "-i",input,
+      "-t",String(Math.max(.1,duration)),
+      "-vn",
+      "-ac","1",
+      "-ar","16000",
+      "-c:a","pcm_s16le",
+      "-f","wav",
+      out
+     ),
+     activeAbort?.signal
+    );
+   }catch(e){
+    try{f.FS("unlink",out)}catch{}
+    if(cancelled||e?.name==="AbortError")throw abortError();
+    throw makeErr(`O FFmpeg não conseguiu extrair o áudio em ${clock(start)}.`,"local_audio");
+   }
+  
+   let raw;
+   try{raw=f.FS("readFile",out)}catch{
+    throw makeErr(`O FFmpeg não gerou áudio em ${clock(start)}.`,"local_audio");
+   }finally{
+    try{f.FS("unlink",out)}catch{}
+   }
+   const copy=new Uint8Array(raw.length);
+   copy.set(raw);
+  
+   if(!validWav(copy)||copy.byteLength<1000){
+    throw makeErr(`O WAV gerado em ${clock(start)} ficou vazio ou inválido.`,"local_audio");
+   }
+   return copy;
+ });
 }
 
-async function post(bytes){
+function quotaMsg(s){
+ return /daily free allocation|10,?000 neurons|account limited|\b4006\b|quota/i.test(String(s||""));
+}
+
+async function postEndpoint(bytes,endpoint,label){
  let last="",lastKind="";
  const waits=[0,1200,2800,5500];
 
  for(let attempt=1;attempt<=waits.length;attempt++){
-  if(cancelled)throw new DOMException("Cancelado","AbortError");
+  if(cancelled)throw abortError();
 
   if(waits[attempt-1]){
    prog(
     Number($("pct").textContent.replace("%",""))||0,
     "Tentando novamente…",
-    `Tentativa ${attempt} de ${waits.length} para o mesmo trecho.`
+    `${label}: tentativa ${attempt} de ${waits.length} para o mesmo trecho.`
    );
-   await new Promise(res=>setTimeout(res,waits[attempt-1]));
-   if(cancelled)throw new DOMException("Cancelado","AbortError");
+   await abortable(
+    new Promise(res=>setTimeout(res,waits[attempt-1])),
+    activeAbort?.signal
+   );
+   if(cancelled)throw abortError();
   }
 
   let r,raw,d;
   try{
-   r=await fetch(ENDPOINT,{
+   r=await fetch(endpoint,{
     method:"POST",
     headers:{"Content-Type":"audio/wav","Accept":"application/json"},
     body:bytes,
@@ -376,10 +401,9 @@ async function post(bytes){
     cache:"no-store"
    });
   }catch(e){
-   if(cancelled || e?.name==="AbortError"){
-    throw new DOMException("Cancelado","AbortError");
-   }
-   last="Falha de rede ao enviar o áudio para o Worker.";
+   if(cancelled || e?.name==="AbortError")throw abortError();
+
+   last=`Falha de rede ao enviar o áudio para o Worker ${label}.`;
    lastKind="network";
    if(attempt<waits.length)continue;
    throw makeErr(last,lastKind);
@@ -391,9 +415,14 @@ async function post(bytes){
   if(r.ok&&d?.ok)return d;
 
   last=d?.erro||raw||`HTTP ${r.status}`;
+
+  if(quotaMsg(last)){
+   throw makeErr(last,"quota");
+  }
+
   lastKind=d?.tipo||(
-    /3030|decode audio|valid audio format/i.test(last) ? "decode_audio" :
-    (r.status===408 || r.status===429 || r.status>=500 ? "transient" : "")
+   /3030|decode audio|valid audio format/i.test(last) ? "decode_audio" :
+   (r.status===408 || r.status===429 || r.status>=500 ? "transient" : "")
   );
 
   const retryable=
@@ -404,7 +433,24 @@ async function post(bytes){
   throw makeErr(last,lastKind);
  }
 
- throw makeErr(last||"Falha ao transcrever o bloco.",lastKind);
+ throw makeErr(last||`Falha ao transcrever no Worker ${label}.`,lastKind);
+}
+
+async function post(bytes,route){
+ try{
+  return await postEndpoint(bytes,route.endpoint,route.label);
+ }catch(e){
+  if(e?.kind!=="quota" || !route.alternate)throw e;
+
+  const altLabel=route.label==="principal"?"reserva":"principal";
+  prog(
+   Number($("pct").textContent.replace("%",""))||0,
+   `Cota do Worker ${route.label} esgotada.`,
+   `Reenviando esse trecho para o Worker ${altLabel}.`
+  );
+
+  return postEndpoint(bytes,route.alternate,altLabel);
+ }
 }
 
 function segmentsOf(d,offset){
@@ -441,6 +487,7 @@ $("go").onclick=async()=>{
  finalVtt="";
  const runAbort=new AbortController();
  activeAbort=runAbort;
+ ffSerial=Promise.resolve();
  let input=null;
  let completedMain=0;
  let totalMain=1;
@@ -451,11 +498,17 @@ $("go").onclick=async()=>{
  $("errorBox").hidden=true;
  $("text").value="";
 
- const lines=[],vtts=["WEBVTT\n"];
- let cue=1;
+ const resultItems=[];
 
  function publish(){
-  $("text").value=lines.join("\n");
+  const ordered=[...resultItems].sort((a,b)=>a.start-b.start||a.end-b.end);
+  $("text").value=ordered.map(x=>`${clock(x.start)} ${x.text}`).join("\n");
+
+  const vtts=["WEBVTT\n"];
+  let cue=1;
+  for(const x of ordered){
+   vtts.push(`${cue++}\n${vclock(x.start)} --> ${vclock(Math.max(x.end,x.start+.1))}\n${x.text}\n`);
+  }
   finalVtt=vtts.join("\n");
   $("result").hidden=false;
  }
@@ -464,11 +517,18 @@ $("go").onclick=async()=>{
   const segs=segmentsOf(d,offset);
   if(segs.length){
    for(const s of segs){
-    lines.push(`${clock(s.start)} ${s.text}`);
-    vtts.push(`${cue++}\n${vclock(s.start)} --> ${vclock(Math.max(s.end,s.start+.1))}\n${s.text}\n`);
+    resultItems.push({
+     start:s.start,
+     end:Math.max(s.end,s.start+.1),
+     text:s.text
+    });
    }
   }else if(String(d.texto||"").trim()){
-   lines.push(`${clock(offset)} ${String(d.texto).trim()}`);
+   resultItems.push({
+    start:offset,
+    end:offset+.1,
+    text:String(d.texto).trim()
+   });
   }
   publish();
  }
@@ -545,18 +605,18 @@ $("go").onclick=async()=>{
   if(to<=from)throw Error("O intervalo selecionado está fora da duração da mídia.");
 
   totalMain=Math.max(1,Math.ceil((to-from)/CHUNK));
-  prog(7,"Preparando transcrição…",`${totalMain} bloco(s) principal(is) de até 5 minutos.`);
+  prog(7,"Preparando transcrição…",`${totalMain} bloco(s) de até 5 minutos • 2 Workers em paralelo.`);
 
   let recoverySerial=0;
 
-  async function processInterval(start,dur,depth=0){
+  async function processInterval(start,dur,route,depth=0){
    if(cancelled)throw new DOMException("Cancelado","AbortError");
 
    const tag=`${Date.now()}_${recoverySerial++}`;
    let bytes;
    try{
     bytes=await extractWav(f,input,start,dur,tag);
-    const d=await post(bytes);
+    const d=await post(bytes,route);
     appendResult(d,start);
     return;
    }catch(err){
@@ -599,7 +659,7 @@ $("go").onclick=async()=>{
       while(offset<dur-.05){
        if(cancelled)throw abortError();
        const part=Math.min(RECOVERY_CHUNK,dur-offset);
-       await processInterval(start+offset,part,depth+1);
+       await processInterval(start+offset,part,route,depth+1);
        offset+=part;
       }
       return;
@@ -614,8 +674,8 @@ $("go").onclick=async()=>{
       "Recuperando trecho automaticamente…",
       `${clock(start)}–${clock(start+dur)} ainda falhou; tentando partes menores.`
      );
-     await processInterval(start,left,depth+1);
-     if(right>.25)await processInterval(start+left,right,depth+1);
+     await processInterval(start,left,route,depth+1);
+     if(right>.25)await processInterval(start+left,right,route,depth+1);
      return;
     }
     throw err;
@@ -624,36 +684,65 @@ $("go").onclick=async()=>{
    }
   }
 
-  for(let i=0;i<totalMain;i++){
-   if(cancelled)throw new DOMException("Cancelado","AbortError");
-   const start=from+i*CHUNK;
-   const dur=Math.min(CHUNK,to-start);
-   if(dur<=.05)break;
-
-   const pct=10+(i/totalMain)*88;
-   prog(
-    pct,
-    `Transcrevendo parte ${i+1} de ${totalMain}…`,
-    `${clock(start)} até ${clock(start+dur)}`
-   );
-
-   try{
-    await processInterval(start,dur);
-   }catch(err){
-    publish();
-    throw Error(`Falha no trecho ${clock(start)}–${clock(start+dur)}: ${err?.message||String(err)}`);
+  const routes=[
+   {
+    label:"principal",
+    endpoint:PRIMARY_ENDPOINT,
+    alternate:BACKUP_ENDPOINT
+   },
+   {
+    label:"reserva",
+    endpoint:BACKUP_ENDPOINT,
+    alternate:PRIMARY_ENDPOINT
    }
+  ];
 
-   completedMain=i+1;
-   prog(
-    10+(completedMain/totalMain)*88,
-    `Parte ${completedMain} de ${totalMain} concluída.`,
-    `Último trecho: ${clock(start)}–${clock(start+dur)}`
-   );
+  async function runLane(lane){
+   const route=routes[lane];
+
+   for(let i=lane;i<totalMain;i+=2){
+    if(cancelled)throw abortError();
+
+    const start=from+i*CHUNK;
+    const dur=Math.min(CHUNK,to-start);
+    if(dur<=.05)break;
+
+    prog(
+     10+(completedMain/totalMain)*88,
+     `Transcrevendo em paralelo… ${completedMain} de ${totalMain} concluídos`,
+     `Worker ${route.label}: ${clock(start)} até ${clock(start+dur)}`
+    );
+
+    try{
+     await processInterval(start,dur,route);
+    }catch(err){
+     publish();
+     if(cancelled || err?.name==="AbortError")throw abortError();
+     throw Error(
+      `Falha no Worker ${route.label}, trecho ${clock(start)}–${clock(start+dur)}: ${err?.message||String(err)}`
+     );
+    }
+
+    completedMain++;
+
+    prog(
+     10+(completedMain/totalMain)*88,
+     `${completedMain} de ${totalMain} blocos concluídos.`,
+     `Último: Worker ${route.label} • ${clock(start)}–${clock(start+dur)}`
+    );
+   }
   }
 
+  const laneCount=Math.min(2,totalMain);
+  const settled=await Promise.allSettled(
+   Array.from({length:laneCount},(_,lane)=>runLane(lane))
+  );
+
+  const failure=settled.find(x=>x.status==="rejected");
+  if(failure)throw failure.reason;
+
   publish();
-  prog(100,"Concluído.",`${completedMain} parte(s) principal(is) processada(s).`);
+  prog(100,"Concluído.",`${completedMain} bloco(s) processado(s) usando os dois Workers.`);
 
  }catch(e){
   if(e?.name==="AbortError" || cancelled){
