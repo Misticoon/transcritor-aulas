@@ -23,11 +23,11 @@ Para vídeo em japonês, selecione **Japonês**.
 ## Atualização necessária
 
 ### Worker principal
-Cole `worker-principal-v13.6.js` e faça Deploy.
+Cole `worker-principal.js` e faça Deploy.
 O GET deve mostrar `"versao":"13.6-primary"`.
 
 ### Worker reserva
-Cole `worker-reserva-v13.6.js` e faça Deploy.
+Cole `worker-reserva.js` e faça Deploy.
 O GET deve mostrar `"versao":"13.6-reserva"`.
 
 Não altere o binding `AI` nem `BACKUP_WORKER_URL`.
@@ -46,5 +46,5 @@ Arquivos desta atualização:
 - `index.html`
 - `style.css`
 - `README.md`
-- `worker-principal-v13.6.js`
-- `worker-reserva-v13.6.js`
+- `worker-principal.js`
+- `worker-reserva.js`
