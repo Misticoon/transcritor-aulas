@@ -10,3 +10,7 @@
 .source-tabs label{cursor:pointer}.source-tabs input{position:absolute;opacity:0;pointer-events:none}
 .source-tabs span{display:block;text-align:center;padding:10px 12px;border-radius:8px;font-weight:750;color:var(--muted);transition:.15s}
 .source-tabs input:checked+span{background:var(--card);color:var(--fg);box-shadow:0 1px 5px #0002}
+
+.language-card{display:grid;gap:7px;margin:16px 0 4px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--bg)}
+.language-card select{width:100%;font:inherit;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--fg)}
+.language-card small{color:var(--muted);font-size:13px;line-height:1.45}

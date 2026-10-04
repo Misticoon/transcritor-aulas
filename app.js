@@ -78,6 +78,13 @@ function setTheme(t){
 }
 $("theme").onclick=()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
 
+const VALID_LANGUAGES=new Set(["pt","ja","auto","en","es","fr","de","it","ko","zh"]);
+const savedLanguage=localStorage.getItem("transcritor-language");
+if(savedLanguage&&VALID_LANGUAGES.has(savedLanguage))$("language").value=savedLanguage;
+$("language").addEventListener("change",()=>{
+ localStorage.setItem("transcritor-language",$("language").value);
+});
+
 document.querySelectorAll('input[name=mode]').forEach(x=>x.onchange=()=>{
  $("times").hidden=document.querySelector('input[name=mode]:checked').value!=="part";
 });
@@ -371,7 +378,7 @@ function quotaMsg(s){
  return /daily free allocation|10,?000 neurons|account limited|\b4006\b|quota/i.test(String(s||""));
 }
 
-async function postEndpoint(bytes,endpoint,label){
+async function postEndpoint(bytes,endpoint,label,language){
  let last="",lastKind="";
  const waits=[0,1200,2800,5500];
 
@@ -393,7 +400,10 @@ async function postEndpoint(bytes,endpoint,label){
 
   let r,raw,d;
   try{
-   r=await fetch(endpoint,{
+   const target=new URL(endpoint);
+   if(language&&language!=="auto")target.searchParams.set("lang",language);
+
+   r=await fetch(target.toString(),{
     method:"POST",
     headers:{"Content-Type":"audio/wav","Accept":"application/json"},
     body:bytes,
@@ -436,9 +446,9 @@ async function postEndpoint(bytes,endpoint,label){
  throw makeErr(last||`Falha ao transcrever no Worker ${label}.`,lastKind);
 }
 
-async function post(bytes,route){
+async function post(bytes,route,language){
  try{
-  return await postEndpoint(bytes,route.endpoint,route.label);
+  return await postEndpoint(bytes,route.endpoint,route.label,language);
  }catch(e){
   if(e?.kind!=="quota" || !route.alternate)throw e;
 
@@ -449,7 +459,7 @@ async function post(bytes,route){
    `Reenviando esse trecho para o Worker ${altLabel}.`
   );
 
-  return postEndpoint(bytes,route.alternate,altLabel);
+  return postEndpoint(bytes,route.alternate,altLabel,language);
  }
 }
 
@@ -488,6 +498,7 @@ $("go").onclick=async()=>{
  const runAbort=new AbortController();
  activeAbort=runAbort;
  ffSerial=Promise.resolve();
+ const runLanguage=$("language").value||"pt";
  let input=null;
  let completedMain=0;
  let totalMain=1;
@@ -605,7 +616,8 @@ $("go").onclick=async()=>{
   if(to<=from)throw Error("O intervalo selecionado está fora da duração da mídia.");
 
   totalMain=Math.max(1,Math.ceil((to-from)/CHUNK));
-  prog(7,"Preparando transcrição…",`${totalMain} bloco(s) de até 5 minutos • 2 Workers em paralelo.`);
+  const languageNames={pt:"Português",ja:"Japonês",auto:"Automático",en:"Inglês",es:"Espanhol",fr:"Francês",de:"Alemão",it:"Italiano",ko:"Coreano",zh:"Chinês"};
+  prog(7,"Preparando transcrição…",`${totalMain} bloco(s) de até 5 minutos • 2 Workers em paralelo • Idioma: ${languageNames[runLanguage]||runLanguage}.`);
 
   let recoverySerial=0;
 
@@ -616,7 +628,7 @@ $("go").onclick=async()=>{
    let bytes;
    try{
     bytes=await extractWav(f,input,start,dur,tag);
-    const d=await post(bytes,route);
+    const d=await post(bytes,route,runLanguage);
     appendResult(d,start);
     return;
    }catch(err){

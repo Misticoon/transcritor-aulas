@@ -1,59 +1,50 @@
-# Transcritor de Aulas — dois Workers em paralelo
+# Transcritor de Aulas — V13.6 com seletor de idioma
 
-## Arquitetura atual
+O site agora permite escolher o idioma do áudio antes de transcrever.
 
-O frontend do Netlify divide a aula em blocos principais de até **5 minutos**.
+- Português (`pt`)
+- Japonês (`ja`)
+- Automático
+- Inglês, Espanhol, Francês, Alemão, Italiano, Coreano e Chinês
 
-Os blocos são distribuídos alternadamente:
+A escolha fica salva no navegador.
 
-- bloco 1 → Worker principal (conta A)
-- bloco 2 → Worker reserva (conta B)
-- bloco 3 → Worker principal
-- bloco 4 → Worker reserva
+Para vídeo em japonês, selecione **Japonês**.
 
-As duas filas trabalham ao mesmo tempo. Assim, para uma aula longa, a carga principal fica aproximadamente 50/50 entre as duas contas.
+## Arquitetura mantida
 
-Se um bloco de 5 minutos falhar, somente aquele bloco entra na recuperação:
+- blocos principais de até 5 minutos;
+- dois Workers em paralelo;
+- carga aproximadamente 50/50;
+- recuperação: 5 min → até 2 min → partes menores → mínimo 3 s;
+- failover de cota;
+- cancelamento sem F5.
 
-- primeiro: partes de até 2 minutos;
-- se ainda falhar: divide apenas a parte problemática;
-- mínimo: 3 segundos.
+## Atualização necessária
 
-O resultado é reorganizado por timestamp antes de aparecer na tela, então a transcrição continua na ordem correta mesmo quando o Worker reserva termina um bloco antes do principal.
+### Worker principal
+Cole `worker-principal-v13.6.js` e faça Deploy.
+O GET deve mostrar `"versao":"13.6-primary"`.
 
-## Workers
+### Worker reserva
+Cole `worker-reserva-v13.6.js` e faça Deploy.
+O GET deve mostrar `"versao":"13.6-reserva"`.
 
-### Principal
-`https://transcritor-aulas.lucas-luk-lima.workers.dev/`
+Não altere o binding `AI` nem `BACKUP_WORKER_URL`.
 
-- código Cloudflare: `worker-principal-v13.1.js`
-- binding Workers AI: `AI`
-- variável `BACKUP_WORKER_URL` apontando para o Worker reserva
-- mantém o failover de cota no backend
-
-### Reserva
-`https://transcritor-aulas-backup.lucas-lima8.workers.dev/`
-
-- código Cloudflare: `worker-reserva-v13.1.js`
-- binding Workers AI: `AI`
-
-O frontend também consegue reenviar para o outro Worker quando recebe um erro explícito de cota.
-
-## Netlify
-
-Deploy manual somente destes arquivos:
-
+### Netlify manual
+Publique apenas:
+- `app.js`
 - `index.html`
 - `style.css`
-- `app.js`
 - `_headers`
 - `favicon.svg`
 
 ## GitHub
-
-Nesta atualização, os arquivos alterados são:
-
+Arquivos desta atualização:
 - `app.js`
+- `index.html`
+- `style.css`
 - `README.md`
-
-Não publique tokens, chaves ou links assinados.
+- `worker-principal-v13.6.js`
+- `worker-reserva-v13.6.js`
