@@ -14,3 +14,10 @@
 .language-card{display:grid;gap:7px;margin:16px 0 4px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--bg)}
 .language-card select{width:100%;font:inherit;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--fg)}
 .language-card small{color:var(--muted);font-size:13px;line-height:1.45}
+
+.time-field{display:grid;gap:6px;min-width:150px}
+.time-field>label:first-child{font-weight:650}
+.edge-toggle{display:flex!important;align-items:center;gap:7px;font-weight:500!important;color:var(--muted);font-size:13px;cursor:pointer}
+.edge-toggle input{width:auto!important;margin:0}
+.time-field>input:disabled{opacity:.55;cursor:not-allowed}
+.interval-help{display:block;margin-top:10px;color:var(--muted);font-size:13px;line-height:1.45}

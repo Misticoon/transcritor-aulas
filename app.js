@@ -89,6 +89,17 @@ document.querySelectorAll('input[name=mode]').forEach(x=>x.onchange=()=>{
  $("times").hidden=document.querySelector('input[name=mode]:checked').value!=="part";
 });
 
+function refreshIntervalEdges(){
+ const fromBeginning=$("fromBeginning").checked;
+ const untilEnd=$("untilEnd").checked;
+ $("start").disabled=fromBeginning;
+ $("end").disabled=untilEnd;
+}
+
+$("fromBeginning").addEventListener("change",refreshIntervalEdges);
+$("untilEnd").addEventListener("change",refreshIntervalEdges);
+refreshIntervalEdges();
+
 function sz(n){
  const u=["B","KB","MB","GB"];let i=0;
  while(n>=1024&&i<3){n/=1024;i++}
@@ -168,6 +179,12 @@ function clock(s){
 function vclock(s){
  const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${x.toFixed(3).padStart(6,"0")}`;
+}
+
+function inputClock(s){
+ s=Math.max(0,Math.floor(Number(s)||0));
+ const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60;
+ return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(x).padStart(2,"0")}`;
 }
 function prog(p,s,d=""){
  $("progressBox").hidden=false;
@@ -498,7 +515,7 @@ $("go").onclick=async()=>{
  const runAbort=new AbortController();
  activeAbort=runAbort;
  ffSerial=Promise.resolve();
- const runLanguage=$("language").value||"pt";
+ const runLanguage=$("language").value||"auto";
  let input=null;
  let completedMain=0;
  let totalMain=1;
@@ -573,21 +590,34 @@ $("go").onclick=async()=>{
   }
 
   const mode=document.querySelector('input[name=mode]:checked').value;
-  let from=0,to=null,duration=null;
+  const fromBeginning=mode==="part" && $("fromBeginning").checked;
+  const untilEnd=mode==="part" && $("untilEnd").checked;
+  let from=0,to=null,duration=null,requestedTo=null;
 
   if(mode==="part"){
-   from=sec($("start").value);
-   to=sec($("end").value);
-   if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to<=from){
-    throw Error("Intervalo inválido. Use exatamente HH:MM:SS (ex.: 01:07:50), com minutos e segundos entre 00 e 59, e deixe o fim maior que o início.");
+   if(!fromBeginning){
+    from=sec($("start").value);
+    if(!Number.isFinite(from)||from<0){
+     throw Error("Horário inicial inválido. Use exatamente HH:MM:SS, por exemplo 00:37:00.");
+    }
    }
-  }else{
-   prog(2,"Lendo duração da aula…","Obtendo os metadados do arquivo.");
-   try{
-    duration=await mediaDuration(file,runAbort.signal);
-   }catch(e){
-    if(cancelled||e?.name==="AbortError")throw abortError();
+
+   if(!untilEnd){
+    requestedTo=sec($("end").value);
+    if(!Number.isFinite(requestedTo)||requestedTo<0){
+     throw Error("Horário final inválido. Use exatamente HH:MM:SS, por exemplo 01:13:00.");
+    }
+    if(requestedTo<=from){
+     throw Error("O horário final precisa ser maior que o horário inicial.");
+    }
    }
+  }
+
+  prog(2,"Lendo duração da aula…","Obtendo a duração real da mídia.");
+  try{
+   duration=await mediaDuration(file,runAbort.signal);
+  }catch(e){
+   if(cancelled||e?.name==="AbortError")throw abortError();
   }
 
   const f=await engine();
@@ -602,22 +632,49 @@ $("go").onclick=async()=>{
 
   if(sourceMode==="url")file=null;
 
-  if(mode==="all"){
-   if(!Number.isFinite(duration)||duration<=0){
-    prog(5,"Lendo duração da aula…","Usando o FFmpeg para identificar a duração.");
-    duration=await probeDuration(f,input);
-   }
-   if(!Number.isFinite(duration)||duration<=0){
-    throw Error("Não foi possível identificar a duração da aula.");
-   }
-   to=duration;
+  if(!Number.isFinite(duration)||duration<=0){
+   prog(5,"Lendo duração da aula…","Usando o FFmpeg para identificar a duração real.");
+   duration=await probeDuration(f,input);
+  }
+  if(!Number.isFinite(duration)||duration<=0){
+   throw Error("Não foi possível identificar a duração da aula.");
   }
 
-  if(to<=from)throw Error("O intervalo selecionado está fora da duração da mídia.");
+  if(mode==="all"){
+   from=0;
+   to=duration;
+  }else{
+   if(from>=duration){
+    throw Error(`O início ${inputClock(from)} está depois do final do vídeo (${inputClock(duration)}).`);
+   }
+
+   if(untilEnd){
+    to=duration;
+    $("end").value=inputClock(duration);
+   }else{
+    to=Math.min(requestedTo,duration);
+    if(requestedTo>duration){
+     $("end").value=inputClock(duration);
+    }
+   }
+
+   if(fromBeginning){
+    from=0;
+    $("start").value="00:00:00";
+   }
+  }
+
+  if(to<=from){
+   throw Error("O intervalo selecionado está fora da duração da mídia.");
+  }
 
   totalMain=Math.max(1,Math.ceil((to-from)/CHUNK));
   const languageNames={pt:"Português",ja:"Japonês",auto:"Automático",en:"Inglês",es:"Espanhol",fr:"Francês",de:"Alemão",it:"Italiano",ko:"Coreano",zh:"Chinês"};
-  prog(7,"Preparando transcrição…",`${totalMain} bloco(s) de até 5 minutos • 2 Workers em paralelo • Idioma: ${languageNames[runLanguage]||runLanguage}.`);
+  const adjustedEnd=mode==="part" && !untilEnd && Number.isFinite(requestedTo) && requestedTo>duration;
+  const intervalNote=adjustedEnd
+   ?` • Fim ajustado automaticamente para ${inputClock(duration)}`
+   :"";
+  prog(7,"Preparando transcrição…",`${totalMain} bloco(s) de até 5 minutos • 2 Workers em paralelo • Idioma: ${languageNames[runLanguage]||runLanguage}${intervalNote}.`);
 
   let recoverySerial=0;
 

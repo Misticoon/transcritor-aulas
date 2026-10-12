@@ -1,50 +1,35 @@
-# Transcritor de Aulas — V13.6 com seletor de idioma
+# Transcritor de Aulas
 
-O site agora permite escolher o idioma do áudio antes de transcrever.
+## Estado atual
 
-- Português (`pt`)
-- Japonês (`ja`)
-- Automático
-- Inglês, Espanhol, Francês, Alemão, Italiano, Coreano e Chinês
+O frontend usa dois Workers Cloudflare em paralelo, com blocos principais de até 5 minutos e recuperação automática em blocos menores.
 
-A escolha fica salva no navegador.
+## Idioma
 
-Para vídeo em japonês, selecione **Japonês**.
+O seletor de idioma agora começa por **Automático**, que também é o padrão quando não existe uma preferência salva no navegador.
 
-## Arquitetura mantida
+## Intervalos
 
-- blocos principais de até 5 minutos;
-- dois Workers em paralelo;
-- carga aproximadamente 50/50;
-- recuperação: 5 min → até 2 min → partes menores → mínimo 3 s;
-- failover de cota;
-- cancelamento sem F5.
+Em **Somente trecho**, há duas opções adicionais:
 
-## Atualização necessária
+- **Desde o início**: usa `00:00:00` como início e deixa você informar apenas o horário final.
+- **Até o final**: deixa você informar apenas o horário inicial e usa automaticamente o final real do vídeo.
 
-### Worker principal
-Cole `worker-principal.js` e faça Deploy.
-O GET deve mostrar `"versao":"13.6-primary"`.
+Se o horário final digitado passar da duração real da mídia, o sistema limita automaticamente o intervalo ao final do vídeo. Exemplo: vídeo termina em `01:13:00` e o usuário informa `01:30:00`; o sistema usa `01:13:00`.
 
-### Worker reserva
-Cole `worker-reserva.js` e faça Deploy.
-O GET deve mostrar `"versao":"13.6-reserva"`.
+## Netlify — deploy manual
 
-Não altere o binding `AI` nem `BACKUP_WORKER_URL`.
-
-### Netlify manual
-Publique apenas:
+Publique:
 - `app.js`
 - `index.html`
 - `style.css`
 - `_headers`
 - `favicon.svg`
 
-## GitHub
-Arquivos desta atualização:
-- `app.js`
-- `index.html`
-- `style.css`
-- `README.md`
+## Cloudflare
+
+Nenhuma alteração de Worker é necessária nesta atualização.
+
+O repositório mantém:
 - `worker-principal.js`
 - `worker-reserva.js`
