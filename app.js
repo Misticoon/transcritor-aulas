@@ -132,33 +132,145 @@ $("drop").ondrop=e=>{
 window.ondragover=e=>e.preventDefault();
 window.ondrop=e=>e.preventDefault();
 
-function normalizeTimeDigits(value){
- const d=String(value||"").replace(/\D/g,"").slice(0,6);
- if(!d)return "";
- if(d.length<=2)return d;
- if(d.length<=4)return `${d.slice(0,2)}:${d.slice(2)}`;
+// Editor numérico progressivo HH:MM:SS: o último dígito entra nos segundos.
+// Ex.: 1 -> 00:00:01; 12 -> 00:00:12; 123 -> 00:01:23.
+function rollingClock(rawDigits){
+ const d=String(rawDigits||"").replace(/\D/g,"").slice(-6).padStart(6,"0");
  return `${d.slice(0,2)}:${d.slice(2,4)}:${d.slice(4,6)}`;
 }
 
-function completeTime(value){
- const d=String(value||"").replace(/\D/g,"").slice(0,6).padEnd(6,"0");
- return `${d.slice(0,2)}:${d.slice(2,4)}:${d.slice(4,6)}`;
+function parsePastedClock(value){
+ const raw=String(value||"").trim();
+ if(/^\d{1,6}$/.test(raw))return rollingClock(raw);
+ if(!/^\d{1,2}:\d{1,2}:\d{1,2}$/.test(raw))return null;
+ const parts=raw.split(":").map(Number);
+ if(parts[0]>99||parts[1]>59||parts[2]>59)return null;
+ return parts.map(p=>String(p).padStart(2,"0")).join(":");
 }
 
 ["start","end"].forEach(id=>{
  const el=$(id);
- el.addEventListener("input",()=>{
-  const pos=el.selectionStart;
-  el.value=normalizeTimeDigits(el.value);
+ // null: ainda não começou uma nova digitação nesse foco.
+ // Após a primeira tecla, todos os dígitos seguintes fazem o relógio avançar.
+ let typed=null;
+ let lastValid=el.value;
+
+ function moveCaretToEnd(){
   try{el.setSelectionRange(el.value.length,el.value.length)}catch{}
+ }
+
+ function setDigits(digits){
+  typed=String(digits||"").replace(/\D/g,"").slice(-6);
+  el.value=rollingClock(typed);
+  if(Number(el.value.slice(3,5))<=59 && Number(el.value.slice(6,8))<=59){
+   lastValid=el.value;
+  }
+  moveCaretToEnd();
+ }
+
+ function typeDigits(digits){
+  for(const digit of String(digits||"")){
+   if(!/^\d$/.test(digit))continue;
+   setDigits((typed??"")+digit);
+  }
+ }
+
+ function removeDigit(){
+  // Backspace remove o último número digitado, deslocando o horário para trás.
+  // Antes de uma nova digitação, utiliza o horário exibido.
+  const current=typed??el.value.replace(/\D/g,"");
+  setDigits(current.slice(0,-1));
+ }
+
+ function clearTime(){
+  setDigits("");
+ }
+
+ el.addEventListener("focus",()=>{
+  typed=null;
+  moveCaretToEnd();
  });
+ el.addEventListener("click",()=>{
+  // Um novo clique permite recomeçar a digitação sem apagar os zeros.
+  typed=null;
+  moveCaretToEnd();
+ });
+
+ el.addEventListener("keydown",e=>{
+  if(e.ctrlKey||e.metaKey||e.altKey||e.isComposing)return;
+  if(/^\d$/.test(e.key)){
+   e.preventDefault();
+   typeDigits(e.key);
+   return;
+  }
+  if(e.key==="Backspace"){
+   e.preventDefault();
+   removeDigit();
+   return;
+  }
+  if(e.key==="Delete"){
+   e.preventDefault();
+   clearTime();
+   return;
+  }
+  // Tab, setas e atalhos comuns continuam disponíveis.
+  if(e.key.length===1)e.preventDefault();
+ });
+
+ // Suporte a teclados virtuais que usam beforeinput sem keydown.
+ el.addEventListener("beforeinput",e=>{
+  if(e.isComposing)return;
+  if(e.inputType==="insertText"){
+   e.preventDefault();
+   if(/^\d+$/.test(e.data||""))typeDigits(e.data);
+  }else if(e.inputType==="deleteContentBackward"){
+   e.preventDefault();
+   removeDigit();
+  }else if(e.inputType==="deleteContentForward"){
+   e.preventDefault();
+   clearTime();
+  }
+ });
+
+ // Colar tanto 123 como 00:01:23.
  el.addEventListener("paste",e=>{
   e.preventDefault();
-  const text=(e.clipboardData||window.clipboardData).getData("text");
-  el.value=normalizeTimeDigits(text);
+  const raw=(e.clipboardData||window.clipboardData).getData("text");
+  const pasted=parsePastedClock(raw);
+  if(pasted===null)return;
+  el.value=pasted;
+  typed=raw.includes(":")?null:raw.replace(/\D/g,"").slice(-6);
+  lastValid=pasted;
+  moveCaretToEnd();
  });
+
+ // Fallback para navegadores que não oferecem beforeinput cancelável.
+ el.addEventListener("input",e=>{
+  if(e.inputType==="insertText"&&/^\d+$/.test(e.data||"")){
+   typeDigits(e.data);
+   return;
+  }
+  if(e.inputType==="deleteContentBackward"){
+   removeDigit();
+   return;
+  }
+  const normalized=parsePastedClock(el.value);
+  if(normalized!==null){
+   el.value=normalized;
+   lastValid=normalized;
+  }else{
+   el.value=lastValid;
+  }
+  typed=null;
+  moveCaretToEnd();
+ });
+
  el.addEventListener("blur",()=>{
-  if(el.value.trim())el.value=completeTime(el.value);
+  if(!/^\d{2}:\d{2}:\d{2}$/.test(el.value) ||
+     Number(el.value.slice(3,5))>59 || Number(el.value.slice(6,8))>59){
+   el.value=lastValid;
+  }
+  typed=null;
  });
 });
 

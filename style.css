@@ -21,3 +21,6 @@
 .edge-toggle input{width:auto!important;margin:0}
 .time-field>input:disabled{opacity:.55;cursor:not-allowed}
 .interval-help{display:block;margin-top:10px;color:var(--muted);font-size:13px;line-height:1.45}
+
+.time-field>input:not([type]){font-variant-numeric:tabular-nums;letter-spacing:.025em;caret-color:auto}
+.time-field>input:not([type]):focus{outline:2px solid var(--muted);outline-offset:2px}
