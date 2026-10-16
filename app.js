@@ -1,5 +1,11 @@
-const PRIMARY_ENDPOINT="https://transcritor-aulas.lucas-luk-lima.workers.dev/";
-const BACKUP_ENDPOINT="https://transcritor-aulas-backup.lucas-lima8.workers.dev/";
+// Os endereços são injetados no deploy a partir do .env local.
+// config.js é gerado por scripts/preparar_netlify.py, não é versionado.
+const DEPLOY_CONFIG=window.TRANSCRITOR_CONFIG;
+if(!DEPLOY_CONFIG || !DEPLOY_CONFIG.PRIMARY_WORKER_URL || !DEPLOY_CONFIG.BACKUP_WORKER_URL){
+ throw Error("Configuração ausente. Gere e publique config.js com python3 scripts/preparar_netlify.py.");
+}
+const PRIMARY_ENDPOINT=DEPLOY_CONFIG.PRIMARY_WORKER_URL;
+const BACKUP_ENDPOINT=DEPLOY_CONFIG.BACKUP_WORKER_URL;
 const ENDPOINT=PRIMARY_ENDPOINT;
 const CHUNK=300, RECOVERY_CHUNK=120, MIN_CHUNK=3, $=x=>document.getElementById(x);
 

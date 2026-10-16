@@ -1,5 +1,13 @@
+# Arquivos locais e saídas de deploy
+.env
+.env.*
+!.env.example
+config.js
+deploy-netlify/
 .netlify/
 .netlify-deploy/
 node_modules/
+__pycache__/
+*.pyc
 *.zip
 .DS_Store
